@@ -19,7 +19,7 @@ def load_tabular_file():
     try:
         import google.colab  # type: ignore
         from google.colab import files  # type: ignore
-        print("📁 Colab detected. Please upload your Excel/CSV file…")
+        print("Colab detected. Please upload your Excel/CSV file…")
         uploaded = files.upload()
         if not uploaded:
             raise RuntimeError("No file uploaded.")
@@ -186,3 +186,4 @@ plt.xlabel("Pearson Correlation")
 plt.ylabel("Task")
 plt.tight_layout()
 plt.show()
+
