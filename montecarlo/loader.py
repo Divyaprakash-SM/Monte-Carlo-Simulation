@@ -26,6 +26,27 @@ COLUMN_ALIASES = {
     "Risk Likelihood": ["risk - likelihood", "risk likelihood", "likelihood"],
     "Risk Score": ["risk - score", "risk score", "score"],
     "Risk Multiplier": ["risk % multiplier", "risk multiplier", "risk %", "multiplier"],
+    # Optional schedule columns: when present, the model also simulates the timeline.
+    "Duration": ["duration (days)", "duration", "most likely duration", "duration days"],
+    "Optimistic Duration": ["optimistic duration", "optimistic duration (days)", "min duration"],
+    "Pessimistic Duration": ["pessimistic duration", "pessimistic duration (days)", "max duration"],
+    "Predecessors": ["predecessors", "depends on", "dependencies", "predecessor"],
+    "Time-dependent %": ["time-dependent %", "time dependent %", "time-dependent share", "time dependent share"],
+}
+
+# Optional risk register sheet (risks as discrete events).
+RISK_ALIASES = {
+    "Risk ID": ["risk id", "id", "ref"],
+    "Risk": ["risk", "description", "risk description", "title"],
+    "Probability": ["probability", "probability (%)", "likelihood (%)", "chance"],
+    "Cost Min": ["cost impact min", "cost min", "min cost impact"],
+    "Cost ML": ["cost impact most likely", "cost impact ml", "cost ml", "cost impact"],
+    "Cost Max": ["cost impact max", "cost max", "max cost impact"],
+    "Days Min": ["schedule impact min (days)", "days min", "schedule impact min"],
+    "Days ML": ["schedule impact most likely (days)", "days ml", "schedule impact most likely", "schedule impact (days)"],
+    "Days Max": ["schedule impact max (days)", "days max", "schedule impact max"],
+    "Affects": ["affected task", "affects", "wbs code", "task"],
+    "Owner": ["owner", "risk owner"],
 }
 
 
@@ -40,16 +61,28 @@ def _clean_code(value) -> str:
     return str(value).strip()
 
 
+def _clean_preds(value) -> str:
+    """'1.2, 1.2.1' / '1.2;1.3' / 1.2 -> '1.2,1.2.1' (comma-separated WBS codes)."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return _clean_code(value)
+    parts = str(value).replace(";", ",").replace(" ", ",").split(",")
+    return ",".join(p.strip() for p in parts if p.strip() and p.strip() != "-")
+
+
 def _read_raw(path: Path, sheet) -> pd.DataFrame:
     if path.suffix.lower() == ".csv":
         return pd.read_csv(path, header=None, dtype=object)
     return pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
 
 
-def _find_header_row(raw: pd.DataFrame) -> int:
+def _find_header_row(raw: pd.DataFrame, aliases: dict | None = None,
+                     must: tuple = ("Task", "Cost")) -> int:
+    aliases = aliases or COLUMN_ALIASES
     for i in range(min(len(raw), 30)):
         cells = {str(v).strip().lower() for v in raw.iloc[i].tolist() if pd.notna(v)}
-        if cells & set(COLUMN_ALIASES["Task"]) and cells & set(COLUMN_ALIASES["Cost"]):
+        if all(cells & set(aliases[m]) for m in must):
             return i
     raise ValueError(
         "Could not find a header row. The sheet needs at least a 'Task' column "
@@ -57,11 +90,11 @@ def _find_header_row(raw: pd.DataFrame) -> int:
     )
 
 
-def _map_columns(header: list) -> dict:
+def _map_columns(header: list, aliases_map: dict | None = None) -> dict:
     """Return {standard name: column index} for every column we recognise."""
     lowered = [str(h).strip().lower() if pd.notna(h) else "" for h in header]
     mapping = {}
-    for std, aliases in COLUMN_ALIASES.items():
+    for std, aliases in (aliases_map or COLUMN_ALIASES).items():
         for idx, name in enumerate(lowered):
             if name in aliases and idx not in mapping.values():
                 mapping[std] = idx
@@ -118,9 +151,14 @@ def load_wbs(path, sheet=0) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df[(df["Task"] != "") & df["Cost"].notna()].reset_index(drop=True)
 
     for col in ("Optimistic", "Pessimistic", "Risk Impact", "Risk Likelihood",
-                "Risk Score", "Risk Multiplier"):
+                "Risk Score", "Risk Multiplier", "Duration", "Optimistic Duration",
+                "Pessimistic Duration", "Time-dependent %"):
         df[col] = pd.to_numeric(df[col], errors="coerce") if col in df else np.nan
     df["Risk Multiplier"] = df["Risk Multiplier"].fillna(0.0)
+    if "Predecessors" in df:
+        df["Predecessors"] = df["Predecessors"].map(_clean_preds)
+    else:
+        df["Predecessors"] = ""
 
     df["Is Summary"] = _detect_summaries(df)
 
@@ -159,3 +197,52 @@ def check_subtotals(tasks: pd.DataFrame, summaries: pd.DataFrame) -> list[str]:
                 "so it is treated as a task in its own right."
             )
     return notes
+
+
+def has_schedule(tasks: pd.DataFrame) -> bool:
+    """True when every task has a most-likely duration, so a schedule can be simulated."""
+    return "Duration" in tasks and tasks["Duration"].notna().all() and len(tasks) > 0
+
+
+def load_risk_register(path, sheet="Risk Register") -> pd.DataFrame | None:
+    """Read an optional risk register: one row per risk event.
+
+    Probability may be given as 40 or 0.4 (both mean 40%). Cost and schedule impacts are
+    three-point ranges; a single value is used as min = most likely = max. 'Affected task'
+    is the WBS code whose duration the risk extends (leave blank for cost-only risks).
+    Returns None when the file has no such sheet.
+    """
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        return None
+    try:
+        raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
+    except ValueError:
+        return None
+    try:
+        hdr = _find_header_row(raw, RISK_ALIASES, must=("Risk", "Probability"))
+    except ValueError:
+        return None
+    cols = _map_columns(raw.iloc[hdr].tolist(), RISK_ALIASES)
+    body = raw.iloc[hdr + 1:].reset_index(drop=True)
+    r = pd.DataFrame({std: body.iloc[:, idx] for std, idx in cols.items()})
+    r = r[r["Risk"].notna() & pd.to_numeric(r["Probability"], errors="coerce").notna()].reset_index(drop=True)
+    if r.empty:
+        return None
+    r["Probability"] = pd.to_numeric(r["Probability"], errors="coerce")
+    if (r["Probability"] > 1).any():
+        r["Probability"] = r["Probability"] / 100
+    for trio in (("Cost Min", "Cost ML", "Cost Max"), ("Days Min", "Days ML", "Days Max")):
+        for c in trio:
+            r[c] = pd.to_numeric(r[c], errors="coerce") if c in r else np.nan
+        ml = r[trio[1]].fillna(r[trio[0]]).fillna(r[trio[2]]).fillna(0.0)
+        r[trio[1]] = ml
+        r[trio[0]] = r[trio[0]].fillna(ml)
+        r[trio[2]] = r[trio[2]].fillna(ml)
+    if "Risk ID" not in r:
+        r["Risk ID"] = [f"R{i + 1}" for i in range(len(r))]
+    r["Risk ID"] = r["Risk ID"].map(_clean_code)
+    r["Affects"] = r["Affects"].map(_clean_code) if "Affects" in r else ""
+    if "Owner" not in r:
+        r["Owner"] = ""
+    return r

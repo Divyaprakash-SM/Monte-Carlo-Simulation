@@ -10,7 +10,7 @@ from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 
 DISTRIBUTIONS = ("triangular", "lognormal", "pert")
-RISK_MODES = ("loaded", "event", "none")
+RISK_MODES = ("loaded", "event", "none", "register")
 DISPLAY_NAMES = {"triangular": "Triangular", "lognormal": "Lognormal", "pert": "Beta-PERT"}
 
 
@@ -21,11 +21,16 @@ class Settings:
     n_sims: int = 10_000
     optimistic_factor: float = 0.90   # used when the sheet has no Optimistic value
     pessimistic_factor: float = 1.20  # used when the sheet has no Pessimistic value
-    risk_mode: str = "loaded"         # "loaded", "event" or "none" (see README)
+    risk_mode: str = "loaded"         # "loaded", "event", "none" or "register" (see README)
     likelihood_scale: float = 6.0     # top of the likelihood scale, for "event" mode
     correlation: float = 0.0          # 0 = tasks independent; 0.3 = moderate shared drift
     pert_lambda: float = 4.0          # standard Beta-PERT shape
     seed: int | None = 42
+    # Schedule (used only when the WBS has durations)
+    duration_optimistic_factor: float = 0.90   # durations: default optimistic = 90% of most likely
+    duration_pessimistic_factor: float = 1.35  # durations overrun more than costs do
+    time_dependent_share: float = 0.5          # share of each task's cost that scales with its duration
+    start_date: str = "2026-01-05"
 
 
 @dataclass

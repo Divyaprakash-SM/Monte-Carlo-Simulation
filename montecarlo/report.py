@@ -11,7 +11,8 @@ from .analysis import milestone_summary, project_summary, sensitivity
 from .model import Result
 
 
-def export_excel(results: dict[str, Result], estimates: pd.DataFrame, path) -> Path:
+def export_excel(results: dict[str, Result], estimates: pd.DataFrame, path, extras: dict | None = None) -> Path:
+    """Write the workbook. ``extras`` adds sheets: {sheet name: DataFrame} (schedule, risks, contingency)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     settings = next(iter(results.values())).settings
@@ -33,6 +34,9 @@ def export_excel(results: dict[str, Result], estimates: pd.DataFrame, path) -> P
         cols = ["WBS Code", "Task", "Milestone", "Cost", "Risk Multiplier",
                 "Optimistic", "Most Likely", "Pessimistic"]
         estimates[cols].round(2).to_excel(xl, sheet_name="Inputs (3-point)", index=False)
+
+        for name, frame in (extras or {}).items():
+            frame.round(4).to_excel(xl, sheet_name=name[:31], index=False)
 
         pd.DataFrame(list(asdict(settings).items()), columns=["Setting", "Value"]).to_excel(
             xl, sheet_name="Assumptions", index=False)

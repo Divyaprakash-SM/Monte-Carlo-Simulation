@@ -123,3 +123,79 @@ def milestones(ms: pd.DataFrame, result: Result, path=None, currency="£"):
     ax.grid(axis="y", visible=False)
     ax.grid(axis="x", color=GRID, linewidth=0.8)
     return _save(fig, path)
+
+
+# ---------------------------------------------------------------------------
+# Schedule, joint confidence and risk-register charts (integrated model)
+# ---------------------------------------------------------------------------
+def finish_s_curve(res, path=None):
+    """Cumulative probability of finishing by each date, with the no-risk date marked."""
+    sr = res.schedule
+    days = np.sort(sr.project_days)
+    dates = [sr.finish_date(d) for d in days[:: max(1, len(days) // 400)]]
+    ys = np.linspace(0, 1, len(dates))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    ax.plot(dates, ys, color=MODEL_COLOURS[res.distribution], linewidth=2)
+    det = sr.finish_date(sr.deterministic_days)
+    p_det = float((sr.project_days <= sr.deterministic_days).mean())
+    ax.axvline(det, color=INK_2, linestyle=":", linewidth=1.2)
+    ax.text(det, 0.6, f"Plan date {det:%d %b %Y}\n{p_det:.0%} chance of making it  ", fontsize=9, color=INK, ha="right")
+    for p in (50, 80):
+        d = sr.finish_date(np.percentile(sr.project_days, p))
+        ax.plot([d], [p / 100], "o", markersize=8, color=MODEL_COLOURS[res.distribution],
+                markeredgecolor=SURFACE, markeredgewidth=2)
+        ax.text(d, p / 100, f"  P{p}  {d:%d %b %Y}", va="center", fontsize=9, color=INK)
+    import matplotlib.dates as mdates
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    _style(ax, "Chance of finishing by each date", "Finish date", "Cumulative probability")
+    return _save(fig, path)
+
+
+def criticality(sens: pd.DataFrame, path=None, top=12):
+    d = sens.head(top).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(10, 0.45 * len(d) + 1.6))
+    bars = ax.barh(d["Task"], d["Criticality index"], height=0.6, color=MODEL_COLOURS["pert"])
+    for bar, v in zip(bars, d["Criticality index"]):
+        ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2, f"  {v:.0%}", va="center", fontsize=9, color=INK)
+    ax.set_xlim(0, 1.12)
+    ax.xaxis.set_major_formatter(PercentFormatter(1.0))
+    _style(ax, "How often each task is on the critical path", "Criticality index (share of simulations)", "")
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    return _save(fig, path)
+
+
+def jcl_scatter(res, budget, days, path=None, currency="£", sample=3000):
+    """Each dot is one simulated project. The shaded box is 'on budget and on time'."""
+    c, t = res.total_cost, res.project_days
+    idx = np.random.default_rng(0).choice(len(c), min(sample, len(c)), replace=False)
+    ok = (c[idx] <= budget) & (t[idx] <= days)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(t[idx][~ok], c[idx][~ok], s=7, color="#b7b6b0", alpha=0.6, linewidths=0, label="Over budget or late")
+    ax.scatter(t[idx][ok], c[idx][ok], s=7, color=MODEL_COLOURS[res.distribution], alpha=0.6, linewidths=0,
+               label="On budget and on time")
+    ax.axhline(budget, color=INK_2, linestyle="--", linewidth=1)
+    ax.axvline(days, color=INK_2, linestyle="--", linewidth=1)
+    jc = float(((c <= budget) & (t <= days)).mean())
+    ax.set_title("")
+    ax.yaxis.set_major_formatter(_money(currency))
+    ax.legend(frameon=False, loc="upper left", fontsize=9, markerscale=3)
+    _style(ax, f"Joint confidence: {jc:.0%} chance of meeting both {currency}{budget:,.0f} "
+               f"and {days:.0f} working days", "Project duration (working days)", "Total cost")
+    return _save(fig, path)
+
+
+def risk_bars(ranking: pd.DataFrame, path=None, currency="£"):
+    col = [c for c in ranking.columns if c.endswith("cost saved if removed")][0]
+    d = ranking.iloc[::-1]
+    fig, ax = plt.subplots(figsize=(10, 0.5 * len(d) + 1.6))
+    bars = ax.barh(d["Risk ID"] + "  " + d["Risk"].str.slice(0, 48), d[col], height=0.6, color=MODEL_COLOURS["lognormal"])
+    for bar, v in zip(bars, d[col]):
+        ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2, f"  {currency}{v:,.0f}", va="center", fontsize=9)
+    ax.set_xlim(0, max(d[col].max(), 1) * 1.2)
+    ax.xaxis.set_major_formatter(_money(currency))
+    _style(ax, "What each risk adds to the P80 budget (saving if fully mitigated)", "Reduction in P80 cost", "")
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    return _save(fig, path)
