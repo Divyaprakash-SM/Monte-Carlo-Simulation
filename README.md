@@ -1,5 +1,7 @@
 # Monte Carlo Cost & Schedule Risk Model
 
+**▶ Live app: [montecarlo-dsmk.streamlit.app](https://montecarlo-dsmk.streamlit.app)** · no install needed
+
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Divyaprakash-SM/Monte-Carlo-Simulation/blob/main/notebooks/Monte_Carlo_Walkthrough.ipynb)
 
 A single cost estimate and a single finish date hide their own uncertainty. This model takes a project's Work Breakdown Structure (WBS), simulates it 10,000 times, and turns each single number into a range with a confidence level: *"there is an 80% chance this project costs £126,861 or less and finishes by 23 September."*
